@@ -1,0 +1,19 @@
+{
+  "name": "qrless",
+  "private": true,
+  "scripts": {
+    "install:all": "npm install && npm --prefix web install && npm --prefix generator install && python3 -m venv generator/.venv && generator/.venv/bin/pip install -r generator/requirements-dev.txt",
+    "dev": "concurrently -n api,web -c blue,green \"npm run dev:api\" \"npm run dev:web\"",
+    "dev:api": "cd generator && LOCAL_DEV=1 SECRET_KEY=local-dev-secret-at-least-32-chars ./.venv/bin/flask --app src.app run --port 5001",
+    "dev:web": "VITE_API_BASE_URL=http://127.0.0.1:5001 npm --prefix web run dev -- --host 127.0.0.1",
+    "test": "LOCAL_DEV=1 SECRET_KEY=test-secret-at-least-32-characters generator/.venv/bin/pytest generator/tests",
+    "build:web": "npm --prefix web run build",
+    "package": "npm run build:web && npm --prefix generator run package",
+    "deploy": "npm run build:web && npm --prefix generator run deploy --",
+    "print:url": "node generator/scripts/print-site-url.js",
+    "remove": "npm --prefix generator run remove --"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}

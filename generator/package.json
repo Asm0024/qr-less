@@ -1,0 +1,16 @@
+{
+  "scripts": {
+    "check:docker": "docker info >/dev/null 2>&1 || (echo 'Docker is not running. Start Docker Desktop, wait until it is ready, then run deploy again.' && exit 1)",
+    "package": "serverless package",
+    "predeploy": "npm run check:docker",
+    "deploy": "serverless deploy && node scripts/print-site-url.js",
+    "remove": "serverless remove"
+  },
+  "devDependencies": {
+    "serverless": "^3.40.0",
+    "serverless-cloudfront-invalidate": "^1.12.2",
+    "serverless-python-requirements": "^6.1.2",
+    "serverless-s3-sync": "^3.4.0",
+    "serverless-wsgi": "^3.0.5"
+  }
+}

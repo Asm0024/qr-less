@@ -1,0 +1,11 @@
+node_modules/
+
+.serverless
+package-lock.json
+__pycache__
+.pytest_cache
+.venv
+local_uploads/
+.serverless-wsgi
+serverless_wsgi.py
+wsgi_handler.py

@@ -1,0 +1,312 @@
+service: qrless
+frameworkVersion: "3"
+
+params:
+  default:
+    tableName: "qrless-users-${sls:stage}"
+    historyTableName: "qrless-history-${sls:stage}"
+    qrBucketName: "qrless-qrcodes-monster-20260430-${sls:stage}"
+    siteBucketName: "qrless-site-monster-20260430-${sls:stage}"
+
+plugins:
+  - serverless-wsgi
+  - serverless-python-requirements
+  - serverless-s3-sync
+  - serverless-cloudfront-invalidate
+
+custom:
+  wsgi:
+    app: src.app.app
+    pythonBin: python3
+  pythonRequirements:
+    dockerizePip: true
+    slim: true
+  s3Sync:
+    - bucketName: ${param:siteBucketName}
+      localDir: ../web/dist
+      deleteRemoved: true
+      params:
+        - "**/*":
+            CacheControl: public, max-age=31536000, immutable
+        - "index.html":
+            CacheControl: no-cache
+  cloudfrontInvalidate:
+    - distributionIdKey: SiteDistributionId
+      items:
+        - /*
+
+provider:
+  name: aws
+  runtime: python3.11
+  region: eu-central-1
+  stage: ${opt:stage, 'dev'}
+  environment:
+    USERS_TABLE: ${param:tableName}
+    HISTORY_TABLE: ${param:historyTableName}
+    SECRET_KEY: ${param:secretKey, env:SECRET_KEY}
+    QR_BUCKET_NAME: ${param:qrBucketName}
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - dynamodb:Query
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+          Resource:
+            - Fn::GetAtt: [UsersTable, Arn]
+            - Fn::Join:
+                - /
+                - - Fn::GetAtt: [UsersTable, Arn]
+                  - index
+                  - "*"
+            - Fn::GetAtt: [HistoryTable, Arn]
+        - Effect: Allow
+          Action:
+            - s3:PutObject
+          Resource:
+            - Fn::Sub: "${QrBucket.Arn}/*"
+
+package:
+  patterns:
+    - "!node_modules/**"
+    - "!package-lock.json"
+    - "!README.md"
+    - "!.venv/**"
+    - "!.pytest_cache/**"
+    - "!__pycache__/**"
+    - "!tests/**"
+
+functions:
+  api:
+    handler: wsgi_handler.handler
+    events:
+      - http:
+          path: /
+          method: ANY
+          cors: true
+      - http:
+          path: /{proxy+}
+          method: ANY
+          cors: true
+
+resources:
+  Resources:
+    UsersTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${param:tableName}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: userId
+            AttributeType: S
+          - AttributeName: username
+            AttributeType: S
+        KeySchema:
+          - AttributeName: userId
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: UsernameIndex
+            KeySchema:
+              - AttributeName: username
+                KeyType: HASH
+            Projection:
+              ProjectionType: ALL
+
+    HistoryTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${param:historyTableName}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: userId
+            AttributeType: S
+          - AttributeName: createdAt
+            AttributeType: S
+        KeySchema:
+          - AttributeName: userId
+            KeyType: HASH
+          - AttributeName: createdAt
+            KeyType: RANGE
+
+    QrBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${param:qrBucketName}
+        CorsConfiguration:
+          CorsRules:
+            - AllowedHeaders:
+                - "*"
+              AllowedMethods:
+                - GET
+              AllowedOrigins:
+                - "*"
+        PublicAccessBlockConfiguration:
+          BlockPublicAcls: false
+          BlockPublicPolicy: false
+          IgnorePublicAcls: false
+          RestrictPublicBuckets: false
+        OwnershipControls:
+          Rules:
+            - ObjectOwnership: BucketOwnerEnforced
+
+    QrBucketPolicy:
+      Type: AWS::S3::BucketPolicy
+      Properties:
+        Bucket:
+          Ref: QrBucket
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            - Sid: PublicReadQrCodes
+              Effect: Allow
+              Principal: "*"
+              Action: s3:GetObject
+              Resource:
+                Fn::Sub: "${QrBucket.Arn}/*"
+
+    SiteBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${param:siteBucketName}
+        PublicAccessBlockConfiguration:
+          BlockPublicAcls: true
+          BlockPublicPolicy: true
+          IgnorePublicAcls: true
+          RestrictPublicBuckets: true
+        OwnershipControls:
+          Rules:
+            - ObjectOwnership: BucketOwnerEnforced
+
+    SiteOriginAccessControl:
+      Type: AWS::CloudFront::OriginAccessControl
+      Properties:
+        OriginAccessControlConfig:
+          Name:
+            Fn::Sub: "${AWS::StackName}-site-oac"
+          OriginAccessControlOriginType: s3
+          SigningBehavior: always
+          SigningProtocol: sigv4
+
+    SiteBucketPolicy:
+      Type: AWS::S3::BucketPolicy
+      Properties:
+        Bucket:
+          Ref: SiteBucket
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+            - Sid: AllowCloudFrontRead
+              Effect: Allow
+              Principal:
+                Service: cloudfront.amazonaws.com
+              Action: s3:GetObject
+              Resource:
+                Fn::Sub: "${SiteBucket.Arn}/*"
+              Condition:
+                StringEquals:
+                  "AWS:SourceArn":
+                    Fn::Sub: "arn:aws:cloudfront::${AWS::AccountId}:distribution/${SiteDistribution}"
+
+    SiteDistribution:
+      Type: AWS::CloudFront::Distribution
+      Properties:
+        DistributionConfig:
+          Enabled: true
+          DefaultRootObject: index.html
+          HttpVersion: http2
+          IPV6Enabled: true
+          PriceClass: PriceClass_100
+          Origins:
+            - Id: SiteS3Origin
+              DomainName:
+                Fn::GetAtt: [SiteBucket, RegionalDomainName]
+              S3OriginConfig:
+                OriginAccessIdentity: ""
+              OriginAccessControlId:
+                Ref: SiteOriginAccessControl
+            - Id: ApiGatewayOrigin
+              DomainName:
+                Fn::Join:
+                  - ""
+                  - - Ref: ApiGatewayRestApi
+                    - ".execute-api."
+                    - Ref: AWS::Region
+                    - ".amazonaws.com"
+              OriginPath: "/${sls:stage}"
+              CustomOriginConfig:
+                OriginProtocolPolicy: https-only
+                OriginSSLProtocols:
+                  - TLSv1.2
+          DefaultCacheBehavior:
+            TargetOriginId: SiteS3Origin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+            CachedMethods:
+              - GET
+              - HEAD
+            Compress: true
+            ForwardedValues:
+              QueryString: false
+              Cookies:
+                Forward: none
+          CacheBehaviors:
+            - PathPattern: /api/*
+              TargetOriginId: ApiGatewayOrigin
+              ViewerProtocolPolicy: redirect-to-https
+              AllowedMethods:
+                - DELETE
+                - GET
+                - HEAD
+                - OPTIONS
+                - PATCH
+                - POST
+                - PUT
+              CachedMethods:
+                - GET
+                - HEAD
+                - OPTIONS
+              Compress: true
+              ForwardedValues:
+                QueryString: true
+                Headers:
+                  - Authorization
+                  - Content-Type
+                  - Origin
+                Cookies:
+                  Forward: all
+              MinTTL: 0
+              DefaultTTL: 0
+              MaxTTL: 0
+          CustomErrorResponses:
+            - ErrorCode: 403
+              ResponseCode: 200
+              ResponsePagePath: /index.html
+              ErrorCachingMinTTL: 0
+            - ErrorCode: 404
+              ResponseCode: 200
+              ResponsePagePath: /index.html
+              ErrorCachingMinTTL: 0
+
+  Outputs:
+    ApiUrl:
+      Value:
+        Fn::Join:
+          - ""
+          - - "https://"
+            - Ref: ApiGatewayRestApi
+            - ".execute-api."
+            - Ref: AWS::Region
+            - ".amazonaws.com/${sls:stage}"
+    SiteUrl:
+      Value:
+        Fn::Sub: "https://${SiteDistribution.DomainName}"
+    SiteDistributionId:
+      Value:
+        Ref: SiteDistribution
+    QrBucketName:
+      Value:
+        Ref: QrBucket
