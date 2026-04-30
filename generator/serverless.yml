@@ -5,8 +5,8 @@ params:
   default:
     tableName: "qrless-users-${sls:stage}"
     historyTableName: "qrless-history-${sls:stage}"
-    qrBucketName: "qrless-qrcodes-monster-20260430-${sls:stage}"
-    siteBucketName: "qrless-site-monster-20260430-${sls:stage}"
+    qrBucketName: "qrless-qrcodes-asm0024-${sls:stage}"
+    siteBucketName: "qrless-site-asm0024-${sls:stage}"
 
 plugins:
   - serverless-wsgi
