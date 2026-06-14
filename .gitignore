@@ -11,6 +11,7 @@ dist/
 .serverless/
 .serverless-wsgi
 .venv/
+venv/
 local_uploads/
 serverless_wsgi.py
 wsgi_handler.py
